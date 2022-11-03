@@ -17,9 +17,9 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/dilame/instagram-private-api.git"
+    "url": "https://github.com/TechFit/instagram-private-api.git"
   },
-  "homepage": "https://github.com/dilame/instagram-private-api",
+  "homepage": "https://github.com/TechFit/instagram-private-api.git",
   "scripts": {
     "build": "rimraf dist && tsc -p tsconfig.build.json",
     "format": "prettier --write \"src/**/*.ts\"",
