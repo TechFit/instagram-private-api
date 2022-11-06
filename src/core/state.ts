@@ -12,8 +12,62 @@ import { IgCookieNotFoundError, IgNoCheckpointError, IgUserIdNotFoundError } fro
 import { Enumerable } from '../decorators';
 import debug from 'debug';
 
+const AUTHORIZATION_TAG: unique symbol = Symbol('authorization-tag');
+
+interface ParsedAuthorization {
+  ds_user_id: string;
+  sessionid: string;
+  should_use_header_over_cookie: string;
+  [AUTHORIZATION_TAG]: string;
+}
+
 export class State {
   private static stateDebug = debug('ig:state');
+  @Enumerable(false)
+  constants = Constants;
+  supportedCapabilities = supportedCapabilities;
+  language: string = 'en_US';
+  timezoneOffset: string = String(new Date().getTimezoneOffset() * -60);
+  radioType = 'wifi-none';
+  capabilitiesHeader = '3brTv10=';
+  connectionTypeHeader = 'WIFI';
+  isLayoutRTL: boolean = false;
+  euDCEnabled?: boolean = undefined;
+  adsOptOut: boolean = false;
+  thumbnailCacheBustingValue: number = 1000;
+  igWWWClaim?: string;
+  authorization?: string;
+  passwordEncryptionPubKey?: string;
+  passwordEncryptionKeyId?: string | number;
+  deviceString: string;
+  build: string;
+  uuid: string;
+  phoneId: string;
+  /**
+   * Google Play Advertising ID.
+   *
+   * The advertising ID is a unique ID for advertising, provided by Google
+   * Play services for use in Google Play apps. Used by Instagram.
+   *
+   * @see https://support.google.com/googleplay/android-developer/answer/6048248?hl=en
+   */
+  adid: string;
+  deviceId: string;
+  @Enumerable(false)
+  proxyUrl: string;
+  @Enumerable(false)
+  cookieStore = new MemoryCookieStore();
+  @Enumerable(false)
+  cookieJar = jar(this.cookieStore);
+  @Enumerable(false)
+  checkpoint: CheckpointResponse | null = null;
+  @Enumerable(false)
+  challenge: ChallengeStateResponse | null = null;
+  clientSessionIdLifetime: number = 1200000;
+  pigeonSessionIdLifetime: number = 1200000;
+  @Enumerable(false)
+  parsedAuthorization?: ParsedAuthorization;
+
   get signatureKey(): string {
     return this.constants.SIGNATURE_KEY;
   }
@@ -57,49 +111,6 @@ export class State {
   get bloksVersionId(): string {
     return this.constants.BLOKS_VERSION_ID;
   }
-
-  @Enumerable(false)
-  constants = Constants;
-  supportedCapabilities = supportedCapabilities;
-  language: string = 'en_US';
-  timezoneOffset: string = String(new Date().getTimezoneOffset() * -60);
-  radioType = 'wifi-none';
-  capabilitiesHeader = '3brTvwE=';
-  connectionTypeHeader = 'WIFI';
-  isLayoutRTL: boolean = false;
-  euDCEnabled?: boolean = undefined;
-  adsOptOut: boolean = false;
-  thumbnailCacheBustingValue: number = 1000;
-  igWWWClaim?: string;
-  authorization?: string;
-  passwordEncryptionPubKey?: string;
-  passwordEncryptionKeyId?: string | number;
-  deviceString: string;
-  build: string;
-  uuid: string;
-  phoneId: string;
-  /**
-   * Google Play Advertising ID.
-   *
-   * The advertising ID is a unique ID for advertising, provided by Google
-   * Play services for use in Google Play apps. Used by Instagram.
-   *
-   * @see https://support.google.com/googleplay/android-developer/answer/6048248?hl=en
-   */
-  adid: string;
-  deviceId: string;
-  @Enumerable(false)
-  proxyUrl: string;
-  @Enumerable(false)
-  cookieStore = new MemoryCookieStore();
-  @Enumerable(false)
-  cookieJar = jar(this.cookieStore);
-  @Enumerable(false)
-  checkpoint: CheckpointResponse | null = null;
-  @Enumerable(false)
-  challenge: ChallengeStateResponse | null = null;
-  clientSessionIdLifetime: number = 1200000;
-  pigeonSessionIdLifetime: number = 1200000;
 
   /**
    * The current application session ID.
@@ -166,7 +177,16 @@ export class State {
   }
 
   public get cookieUserId() {
-    return this.extractCookieValue('ds_user_id');
+    const cookie = this.extractCookie('ds_user_id');
+    if (cookie !== null) {
+      return cookie.value;
+    }
+    this.updateAuthorization();
+    if (!this.parsedAuthorization) {
+      State.stateDebug('Could not find ds_user_id');
+      throw new IgCookieNotFoundError('ds_user_id');
+    }
+    return this.parsedAuthorization.ds_user_id;
   }
 
   public get cookieUsername() {
@@ -226,7 +246,7 @@ export class State {
     const obj = typeof state === 'string' ? JSON.parse(state) : state;
     if (typeof obj !== 'object') {
       State.stateDebug(`State deserialization failed, obj is of type ${typeof obj} (object expected)`);
-      throw new TypeError('State isn\'t an object or serialized JSON');
+      throw new TypeError("State isn't an object or serialized JSON");
     }
     State.stateDebug(`Deserializing ${Object.keys(obj).join(', ')}`);
     if (obj.constants) {
@@ -258,5 +278,27 @@ export class State {
 
   private generateTemporaryGuid(seed: string, lifetime: number) {
     return new Chance(`${seed}${this.deviceId}${Math.round(Date.now() / lifetime)}`).guid();
+  }
+
+  private hasValidAuthorization() {
+    return this.parsedAuthorization && this.parsedAuthorization[AUTHORIZATION_TAG] === this.authorization;
+  }
+
+  private updateAuthorization() {
+    if (!this.hasValidAuthorization()) {
+      if (this.authorization?.startsWith('Bearer IGT:2:')) {
+        try {
+          this.parsedAuthorization = {
+            ...JSON.parse(Buffer.from(this.authorization.substring('Bearer IGT:2:'.length), 'base64').toString()),
+            [AUTHORIZATION_TAG]: this.authorization,
+          };
+        } catch (e) {
+          State.stateDebug(`Could not parse authorization: ${e}`);
+          this.parsedAuthorization = undefined;
+        }
+      } else {
+        this.parsedAuthorization = undefined;
+      }
+    }
   }
 }
